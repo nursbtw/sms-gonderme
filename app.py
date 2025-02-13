@@ -3,15 +3,8 @@ from flask_cors import CORS
 import logging
 import pandas as pd
 import json
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+import cloudscraper
 import time
-import os
 
 app = Flask(__name__)
 CORS(app)
@@ -20,95 +13,93 @@ CORS(app)
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-def send_sms_via_web(message, numbers):
-    # Configure Chrome options
-    chrome_options = Options()
-    chrome_options.add_argument('--headless')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    
-    # Initialize Chrome driver with webdriver-manager
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    wait = WebDriverWait(driver, 20)
-    
+def send_sms(message, numbers):
     try:
-        # Go to login page
-        logger.info("Navigating to login page")
-        driver.get('https://yurticisms1.com/login')
+        # Create a cloudscraper session
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'mobile': False
+            }
+        )
         
-        # Login
-        logger.info("Attempting to login")
-        username = wait.until(EC.presence_of_element_located((By.NAME, 'username')))
-        password = wait.until(EC.presence_of_element_located((By.NAME, 'password')))
-        submit = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[type="submit"]')))
+        # First get the login page to get any necessary cookies
+        logger.info("Getting login page")
+        login_url = 'https://yurticisms1.com/login'
+        login_response = scraper.get(login_url)
         
-        username.send_keys('user')
-        password.send_keys('Tr**ys^4e')
-        submit.click()
-        
-        # Wait for login to complete and navigate to SMS page
-        time.sleep(2)
-        logger.info("Navigating to SMS page")
-        driver.get('https://yurticisms1.com/sms/send')
-        
-        # Fill in SMS form
-        logger.info("Filling SMS form")
-        message_field = wait.until(EC.presence_of_element_located((By.NAME, 'message')))
-        numbers_field = wait.until(EC.presence_of_element_located((By.NAME, 'numbers')))
-        
-        message_field.send_keys(message)
-        numbers_field.send_keys('\n'.join(numbers))
-        
-        # Try to select Turkish encoding if available
-        try:
-            encoding = wait.until(EC.presence_of_element_located((By.NAME, 'encoding')))
-            encoding.send_keys('turkish')
-        except:
-            logger.warning("Could not set Turkish encoding")
-        
-        # Submit form
-        logger.info("Submitting form")
-        submit = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[type="submit"]')))
-        submit.click()
-        
-        # Wait for response
-        time.sleep(2)
-        
-        # Check for success/error messages
-        try:
-            success = driver.find_element(By.CLASS_NAME, 'alert-success')
-            if success:
-                logger.info(f"Success: {success.text}")
-                return {"success": True, "message": success.text}
-        except:
-            pass
+        if login_response.status_code != 200:
+            logger.error(f"Failed to get login page: {login_response.status_code}")
+            return {"success": False, "error": "Could not access login page"}
             
-        try:
-            error = driver.find_element(By.CLASS_NAME, 'alert-danger')
-            if error:
-                logger.error(f"Error: {error.text}")
-                return {"success": False, "error": error.text}
-        except:
-            pass
+        # Login to the system
+        logger.info("Attempting to login")
+        login_data = {
+            'username': 'user',
+            'password': 'Tr**ys^4e'
+        }
         
-        logger.info("SMS sent successfully")
-        return {"success": True, "message": "SMS sent successfully"}
+        login_result = scraper.post(login_url, data=login_data)
         
+        if login_result.status_code != 200:
+            logger.error(f"Login failed: {login_result.status_code}")
+            return {"success": False, "error": "Login failed"}
+            
+        # Send SMS
+        logger.info("Sending SMS")
+        sms_url = 'https://yurticisms1.com/sms_api/json'
+        
+        sms_data = {
+            'user': {
+                'name': 'user',
+                'pass': 'Tr**ys^4e'
+            },
+            'msgBaslik': 'APITEST',
+            'msgData': message,
+            'msgNumbers': ','.join(numbers),
+            'msgEncoding': 'turkish',
+            'msgSaveReport': '1',
+            'msgTime': '',
+            'msgTimeZone': '+0300'
+        }
+        
+        # Add headers to mimic browser
+        headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Content-Type': 'application/json',
+            'Origin': 'https://yurticisms1.com',
+            'Referer': 'https://yurticisms1.com/',
+        }
+        
+        response = scraper.post(sms_url, json=sms_data, headers=headers)
+        
+        logger.info(f"SMS API Response Status: {response.status_code}")
+        logger.info(f"SMS API Response Content: {response.text}")
+        
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                return {"success": True, "message": "SMS sent successfully", "api_response": result}
+            except json.JSONDecodeError:
+                if "success" in response.text.lower():
+                    return {"success": True, "message": "SMS sent successfully"}
+                return {"success": False, "error": "Invalid JSON response", "response": response.text}
+        else:
+            return {
+                "success": False,
+                "error": "SMS API error",
+                "status": response.status_code,
+                "details": response.text
+            }
+            
     except Exception as e:
-        logger.error(f"Error in web automation: {str(e)}")
+        logger.error(f"Error sending SMS: {str(e)}", exc_info=True)
         return {"success": False, "error": str(e)}
-    finally:
-        driver.quit()
 
 @app.route('/send_sms', methods=['POST'])
-def send_sms():
+def handle_sms():
     try:
         logger.info("Received SMS request")
         
@@ -145,8 +136,8 @@ def send_sms():
             
         logger.info(f"Formatted numbers: {','.join(formatted_numbers)}")
         
-        # Send SMS using web automation
-        result = send_sms_via_web(message, formatted_numbers)
+        # Send SMS
+        result = send_sms(message, formatted_numbers)
         
         if result.get("success"):
             return jsonify(result), 200
