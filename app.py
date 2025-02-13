@@ -4,6 +4,10 @@ import requests
 import json
 import logging
 import traceback
+import urllib3
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -103,21 +107,39 @@ def send_sms():
             'password': SMS_API_CONFIG['PASSWORD'],
             'message': message,
             'numbers': numbers_str,
-            'datacoding': 'turkish'
+            'datacoding': 'turkish',
+            'startdate': '',
+            'stopdate': '',
+            'msgheader': 'APITEST'
+        }
+
+        # Add specific headers that the API might expect
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json, text/plain, */*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Origin': 'https://yurticisms1.com',
+            'Referer': 'https://yurticisms1.com/',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
         }
         
         logger.info("Sending request to SMS API")
+        logger.debug(f"Request headers: {headers}")
+        logger.debug(f"Request data: {data}")
         
-        # Make the request with minimal headers
+        # Make the request with specific headers
         response = requests.post(
             SMS_API_CONFIG['API_URL'],
             data=data,
-            timeout=30
+            headers=headers,
+            timeout=30,
+            verify=False  # Temporarily disable SSL verification for testing
         )
         
         logger.info(f"API Response - Status: {response.status_code}")
         logger.info(f"API Response - Content: {response.text}")
-        
+        logger.debug(f"Response headers: {dict(response.headers)}")
+
         if response.status_code == 200:
             try:
                 return jsonify(response.json()), 200
