@@ -5,6 +5,7 @@ import requests
 import json
 import logging
 from datetime import datetime
+from functools import wraps
 
 # Configure logging to console and file
 logging.basicConfig(
@@ -18,7 +19,13 @@ logging.basicConfig(
 
 # Create Flask app
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:3000", "https://your-frontend-domain.com"],
+        "methods": ["POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 app.debug = True
 
 # Configure upload folder
@@ -225,6 +232,15 @@ def get_previous_reports(limit=50):
     
     return reports
 
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        api_key = request.headers.get('X-API-Key')
+        if not api_key or api_key != os.environ.get('API_KEY', 'your-secret-key'):
+            return jsonify({"error": "Invalid API key"}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
 @app.route('/favicon.ico')
 def favicon():
     return send_from_directory(os.path.join(app.root_path, 'static'),
@@ -234,8 +250,60 @@ def favicon():
 def index():
     return render_template('index.html')
 
-@app.route('/send_sms', methods=['POST'])
+@app.route('/api/send-sms', methods=['POST'])
+@require_api_key
 def send_sms():
+    try:
+        data = request.json
+        if not data or not data.get('message') or not data.get('numbers'):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        # Prepare the request to the SMS API
+        sms_payload = {
+            'username': SMS_API_CONFIG['USERNAME'],
+            'password': SMS_API_CONFIG['PASSWORD'],
+            'message': data['message'],
+            'numbers': data['numbers'],
+            'datacoding': SMS_API_CONFIG['DATACODING']
+        }
+
+        # Add custom headers to avoid CORS and improve security
+        headers = {
+            'User-Agent': 'SMS-Proxy-Server/1.0',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+
+        # Make the request to the SMS API
+        response = requests.post(
+            SMS_API_CONFIG['API_URL'],
+            json=sms_payload,
+            headers=headers,
+            timeout=30
+        )
+
+        # Log the response for debugging
+        logging.info(f"SMS API Response: {response.status_code} - {response.text}")
+
+        # Handle the response
+        if response.status_code == 200:
+            return jsonify(response.json()), 200
+        else:
+            return jsonify({
+                "error": "SMS API error",
+                "status": response.status_code,
+                "details": response.text
+            }), response.status_code
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Request error: {str(e)}")
+        return jsonify({"error": "Failed to send SMS", "details": str(e)}), 500
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}")
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+@app.route('/send_sms', methods=['POST'])
+def send_sms_legacy():
     message = request.form.get('message', '')
     file = request.files.get('number_file')
     manual_numbers = request.form.get('manual_numbers', '')
