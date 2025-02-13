@@ -5,12 +5,6 @@ import json
 import logging
 import traceback
 import urllib3
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-import time
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -24,83 +18,10 @@ CORS(app)
 
 # SMS API Configuration
 SMS_API_CONFIG = {
-    'API_URL': 'https://yurticisms1.com/sms_api',
+    'API_URL': 'https://yurticisms1.com/sms_api/json',
     'USERNAME': 'user',
-    'PASSWORD': 'Tr**ys^4e',
-    'DATACODING': 'turkish'
+    'PASSWORD': 'Tr**ys^4e'
 }
-
-def setup_driver():
-    chrome_options = Options()
-    chrome_options.add_argument('--headless')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    return webdriver.Chrome(options=chrome_options)
-
-def send_sms_via_selenium(message, numbers):
-    try:
-        driver = setup_driver()
-        logger.info("Selenium driver initialized")
-        
-        # Navigate to the login page
-        driver.get('https://yurticisms1.com/')
-        logger.info("Navigated to website")
-        
-        # Login
-        try:
-            username_field = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "username"))
-            )
-            password_field = driver.find_element(By.NAME, "password")
-            
-            username_field.send_keys(SMS_API_CONFIG['USERNAME'])
-            password_field.send_keys(SMS_API_CONFIG['PASSWORD'])
-            password_field.submit()
-            logger.info("Login form submitted")
-            
-            # Wait for login to complete
-            time.sleep(2)
-            
-            # Navigate to SMS sending page
-            driver.get('https://yurticisms1.com/sms_api')
-            logger.info("Navigated to SMS API page")
-            
-            # Fill in the SMS form
-            message_field = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "message"))
-            )
-            numbers_field = driver.find_element(By.NAME, "numbers")
-            
-            message_field.send_keys(message)
-            numbers_field.send_keys(numbers)
-            
-            # Submit the form
-            message_field.submit()
-            logger.info("SMS form submitted")
-            
-            # Wait for response
-            time.sleep(2)
-            
-            # Get response
-            response_text = driver.page_source
-            logger.info(f"Response received: {response_text}")
-            
-            return {"success": True, "message": "SMS sent successfully"}
-            
-        except Exception as e:
-            logger.error(f"Error during Selenium operation: {str(e)}")
-            logger.error(traceback.format_exc())
-            return {"error": str(e)}
-            
-        finally:
-            driver.quit()
-            logger.info("Selenium driver closed")
-            
-    except Exception as e:
-        logger.error(f"Error setting up Selenium: {str(e)}")
-        logger.error(traceback.format_exc())
-        return {"error": str(e)}
 
 @app.route('/')
 def index():
@@ -179,13 +100,59 @@ def send_sms():
         
         logger.info(f"Formatted numbers: {numbers_str}")
         
-        # Send SMS using Selenium
-        result = send_sms_via_selenium(message, numbers_str)
+        # Prepare form data exactly as the API expects
+        payload = {
+            'user': {
+                'name': SMS_API_CONFIG['USERNAME'],
+                'pass': SMS_API_CONFIG['PASSWORD']
+            },
+            'msgBaslik': 'APITEST',
+            'msgData': message,
+            'msgNumbers': numbers_str,
+            'msgEncoding': 'turkish',
+            'msgSaveReport': '1',
+            'msgTime': '',
+            'msgTimeZone': '+0300'
+        }
         
-        if "error" in result:
-            return jsonify({"error": "SMS gönderimi başarısız", "details": result["error"]}), 500
+        # Add specific headers that the API might expect
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+        }
         
-        return jsonify(result), 200
+        logger.info("Sending request to SMS API")
+        logger.debug(f"Request headers: {headers}")
+        logger.debug(f"Request payload: {payload}")
+        
+        # Make the request
+        response = requests.post(
+            SMS_API_CONFIG['API_URL'],
+            json=payload,
+            headers=headers,
+            verify=False,
+            timeout=30
+        )
+        
+        logger.info(f"API Response - Status: {response.status_code}")
+        logger.info(f"API Response - Content: {response.text}")
+        logger.debug(f"Response headers: {dict(response.headers)}")
+
+        if response.status_code == 200:
+            try:
+                return jsonify(response.json()), 200
+            except json.JSONDecodeError:
+                return jsonify({"success": True, "message": response.text}), 200
+        else:
+            error_msg = {
+                "error": "SMS API hatası",
+                "status": response.status_code,
+                "details": response.text
+            }
+            logger.error(f"API Error: {error_msg}")
+            return jsonify(error_msg), response.status_code
             
     except Exception as e:
         error_msg = {
