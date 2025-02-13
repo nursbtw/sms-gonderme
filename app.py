@@ -3,6 +3,11 @@ from flask_cors import CORS
 import requests
 import json
 import logging
+import traceback
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins temporarily for testing
@@ -17,15 +22,30 @@ SMS_API_CONFIG = {
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Error rendering index: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            "error": "Sayfa yüklenirken bir hata oluştu",
+            "details": str(e),
+            "trace": traceback.format_exc()
+        }), 500
 
 @app.route('/send_sms', methods=['POST'])
 def send_sms():
     try:
+        logger.info("Received SMS request")
+        
         # Get form data
         message = request.form.get('message', '')
         file = request.files.get('number_file')
         manual_numbers = request.form.get('manual_numbers', '')
+        
+        logger.debug(f"Message: {message}")
+        logger.debug(f"Manual numbers: {manual_numbers}")
+        logger.debug(f"File uploaded: {bool(file)}")
         
         numbers = []
         
@@ -35,31 +55,47 @@ def send_sms():
         
         # Process file if uploaded
         if file:
-            if file.filename.endswith('.txt'):
-                numbers.extend([num.strip() for num in file.read().decode('utf-8').splitlines() if num.strip()])
-            elif file.filename.endswith(('.xlsx', '.xls')):
-                import pandas as pd
-                df = pd.read_excel(file)
-                numbers.extend([str(num).strip() for num in df.iloc[:, 0].tolist() if str(num).strip()])
+            try:
+                if file.filename.endswith('.txt'):
+                    numbers.extend([num.strip() for num in file.read().decode('utf-8').splitlines() if num.strip()])
+                elif file.filename.endswith(('.xlsx', '.xls')):
+                    import pandas as pd
+                    df = pd.read_excel(file)
+                    numbers.extend([str(num).strip() for num in df.iloc[:, 0].tolist() if str(num).strip()])
+            except Exception as e:
+                logger.error(f"Error processing file: {str(e)}")
+                logger.error(traceback.format_exc())
+                return jsonify({
+                    "error": "Dosya işlenirken bir hata oluştu",
+                    "details": str(e)
+                }), 400
         
         if not numbers:
-            return jsonify({"error": "No valid phone numbers provided"}), 400
+            return jsonify({"error": "Geçerli telefon numarası bulunamadı"}), 400
+
+        logger.info(f"Processing {len(numbers)} numbers")
 
         # Format phone numbers
         formatted_numbers = []
         for num in numbers:
-            # Remove any non-digit characters
-            num = ''.join(filter(str.isdigit, num))
-            # If number starts with 0, remove it
-            if num.startswith('0'):
-                num = num[1:]
-            # If number doesn't start with 90, add it
-            if not num.startswith('90'):
-                num = '90' + num
-            formatted_numbers.append(num)
+            try:
+                # Remove any non-digit characters
+                num = ''.join(filter(str.isdigit, num))
+                # If number starts with 0, remove it
+                if num.startswith('0'):
+                    num = num[1:]
+                # If number doesn't start with 90, add it
+                if not num.startswith('90'):
+                    num = '90' + num
+                formatted_numbers.append(num)
+            except Exception as e:
+                logger.error(f"Error formatting number {num}: {str(e)}")
+                continue
 
         # Convert to comma-separated string
         numbers_str = ','.join(formatted_numbers)
+        
+        logger.info(f"Formatted numbers: {numbers_str}")
         
         # Prepare form data exactly as the API expects
         data = {
@@ -70,6 +106,8 @@ def send_sms():
             'datacoding': 'turkish'
         }
         
+        logger.info("Sending request to SMS API")
+        
         # Make the request with minimal headers
         response = requests.post(
             SMS_API_CONFIG['API_URL'],
@@ -77,10 +115,8 @@ def send_sms():
             timeout=30
         )
         
-        print(f"Request URL: {SMS_API_CONFIG['API_URL']}")
-        print(f"Request Data: {data}")
-        print(f"Response Status: {response.status_code}")
-        print(f"Response Text: {response.text}")
+        logger.info(f"API Response - Status: {response.status_code}")
+        logger.info(f"API Response - Content: {response.text}")
         
         if response.status_code == 200:
             try:
@@ -88,15 +124,22 @@ def send_sms():
             except json.JSONDecodeError:
                 return jsonify({"success": True, "message": response.text}), 200
         else:
-            return jsonify({
-                "error": "SMS API error",
+            error_msg = {
+                "error": "SMS API hatası",
                 "status": response.status_code,
                 "details": response.text
-            }), response.status_code
+            }
+            logger.error(f"API Error: {error_msg}")
+            return jsonify(error_msg), response.status_code
             
     except Exception as e:
-        print(f"Error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        error_msg = {
+            "error": "Bir hata oluştu",
+            "details": str(e),
+            "trace": traceback.format_exc()
+        }
+        logger.error(f"Unexpected error: {error_msg}")
+        return jsonify(error_msg), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
