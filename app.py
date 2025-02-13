@@ -1,10 +1,11 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import logging
 import pandas as pd
 import json
 import cloudscraper
 import time
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -12,6 +13,17 @@ CORS(app)
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+@app.route('/')
+def index():
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Error rendering index: {str(e)}")
+        return jsonify({
+            "error": "Sayfa yüklenirken bir hata oluştu",
+            "details": str(e)
+        }), 500
 
 def send_sms(message, numbers):
     try:
